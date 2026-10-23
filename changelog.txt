@@ -1,3 +1,84 @@
+Verze 1.50 - zmeny oproti 1.40:
+Podpora Ondry s hardwarovou upravou - mechanickym prepinacem taktu CPU 2/4 MHz.
+Takt se meri za behu, jedna binarka funguje na stroji s upravou i bez ni.
+common/speed.asm:
+  - novy soubor, sdileny FileManagerem i zavadecem - rutina CPUDET zmeri takt
+    CPU podle systemoveho citace snimku FRAMES (0D62Fh), ktery zvysuje obsluha
+    preruseni v ROM 50x za sekundu nezavisle na taktu; pocet pruchodu smyckou
+    mezi dvema tiky je merou taktu
+  - nastavuje priznak CPU4 a casove konstanty T96BIT / T96STP pro T9600
+  - behem mereni se stin portu 0AH (PORT10, 0D628h) upravi tak, aby byl TXD
+    (bit 2) a /STB (bit 3) v klidu (1), a po mereni se vrati. Obsluha preruseni
+    totiz pri kazdem preruseni zapisuje stin na port 0AH. Menu ROM+ v1.5 po volbe
+    "Zavest ze site" nechava ve stinu 01 (TXD = 0), takze se v okne EI drzela
+    linka do modulu v nule a modul pred prvnim prikazem videl break misto
+    startbitu - FileManager se pak zasekl pri cteni adresare. Cestou pres
+    editor (System SSM + # ENTER) je stin 0F a vse fungovalo
+make.asm:
+  - pridan include common/speed.asm, beep.asm se includuje z common/
+  - vychozi podoba je pro sjasmplus (zakomentovane #define, " include"),
+    prelozi se primo z korene: sjasmplus --raw=dist/_ONDRAFM.BIN make.asm;
+    postup pro TASM (opacny prevod) je popsany v hlavicce make.asm
+main.asm:
+  - MEASUR (CPUDET + SETRD) pred kazdou akci, ktera posila prikazy modulu -
+    start, GOROM, LOADIT, ROOTDIR a RUN (READDIR navazuje na CHDIR/ROOTDIR
+    bez dalsiho mereni). Prepinac je mechanicky, takze se da cvaknout i za
+    behu, a merit jen pri startu nestaci
+  - pozor: mereni nesmi byt mezi prikazem a odpovedi modulu, trva 20-40 ms
+    s povolenym prerusenim a prvni bajty odpovedi by se do nej ztratily
+  - LOADIT vola jeste TAPEBUF+6 (CPUDET v zavadeci), aby mel zavadec vlastni
+    priznak taktu cerstvy
+  - SETRD prepisuje cil CALLu v GETREC a RDVER podle taktu - ve cteci smycce
+    nesmi pribyt zadna rozbocka, mezi bajty je vyuzity kazdy T
+  - autorepeat pri 4 MHz: opakovani klavesy nema casovac, je to rychlost smycky
+    MLOOP. WAIT se pri 4 MHz projde 2x, ale KEYSCAN a obsluha sipek bezi na
+    4 MHz za polovicni cas, takze kurzor projizdel seznam 1,6x rychleji
+    (2 MHz: 59 189 T = ~154 ms na pruchod, 4 MHz: 72 772 T = ~95 ms). Obsluha
+    klaves se vraci pres MLOOPD, ktery pri CPU4 = 1 prida WAIT s HL = 859
+    (RPTWT); po uprave je 4 MHz na 118 173 T = ~154 ms. Zpozdeni je az za
+    obsluhou, takze prvni reakce na stisk zustava okamzita. Takt se v MLOOP
+    nemeri znovu - plati CPU4 z posledniho MEASUR, po cvaknuti prepinace
+    behem prochazeni se tedy srovna az pri dalsim mereni
+  - cislo verze na 1.50
+  - READDIR: zapis na port 0AH pred prikazem D zmenen z 00011110b na 00001110b.
+    Bit 4 je rele magnetofonu, takze puvodni hodnota (z puvodnich zdrojaku)
+    na ~64 us sepnula rele, nez ho vypnul prvni zapis ve T57k6; v emulatoru
+    pri kazdem cteni adresare problikla ikona. Zelena LED (bit 0) zustava
+    beze zmeny
+txd.asm:
+  - T9600 bere sirku bitu i stop-bitu z konstant nastavenych CPUDET
+  - nova T57k64 - vysilani 57600 Bd pri 4 MHz, 69T na bit; pri 4 MHz je
+    v bitove bunce dost mista na smycku, takze je kratsi nez rozbalena verze
+  - rozbocka na zacatku T57k6
+loader.asm:
+  - nova R57K64 - cteni bajtu pri 4 MHz, 69T na bit, pocet bitu hlida
+    zarazka 80h v L (B zustava volne)
+  - vstupni prodleva se NEDA odvodit zdvojnasobenim 2 MHz hodnoty: detekce
+    start-bitu trva v obou taktech stejnych 17-41T, ale bunka je dvakrat
+    sirsi, takze by prvy vzorek padl jeste do start-bitu a bajt by vysel
+    posunuty o bit. Vzorkuje se ~103T po hrane, uprostred bunky 0. bitu
+common/beep.asm:
+  - WAIT se pri 4 MHz projde dvakrat, aby prodlevy mezi prikazy pro modul
+    mely stejny realny cas; soubor je sdileny FileManagerem i zavadecem
+loader/ (drive preloader/_LOADER2/):
+  - stejne upravy ve vlastnich kopiich + novy vstupni bod TAPEBUF+6 = CPUDET
+  - preloader (__LOADER.BIN) se nemeni, stoji na rutinach ROM; ty maji
+    casovky v systemovych promennych 0D4C6h-0D4C8h a ROM+ v1.6 si je
+    nastavuje podle taktu sama
+Struktura repozitare:
+  - LOADER/ -> loader/orig/ (puvodni Martinuv zavadec, beze zmen)
+  - preloader/_LOADER2/ -> loader/ (nas zavadec); speed.asm a beep.asm sdilene
+    s FileManagerem presunuty do common/
+  - preloader/ obsahuje jen preloader (preload.asm, drive _preload.a80, + README)
+  - prelozene binarky (__LOADER.BIN, _LOADER2.BIN, nove _ONDRAFM.BIN) v dist/
+Overeno v JOndrovi s emulovanym modulem OndraSD pri 2 i 4 MHz: cely retez
+preloader - zavadec - FileManager, vypis adresare, CHDIR i nacteni souboru.
+Vyzkouseno take na replice Ondry prepnute na 4 MHz.
+Prepinani taktu za behu (hotswitch) na realnem stroji vyzkouseno neni: replika
+ma jen cisty posuvny prepinac a pro spolehlive prepnuti bezici CPU by potrebovala
+pridavny obvod proti zakmitum. Software s tim pocita (takt se meri pred kazdou
+akci, ktera posila prikazy modulu), ale overeny je zatim jen v emulatoru.
+
 Verze 1.40 - zmeny oproti 1.33:
 make.asm
   - pridan include sort.asm

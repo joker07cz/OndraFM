@@ -216,3 +216,42 @@ ERROR:		LD	C, 128		; zapipaj SOS
 ; -------------------------------
 ; koniec rutiny LOADER 58
 ; -------------------------------
+
+; -------------------------------
+; nacteni jednoho bajtu pri taktu CPU 4 MHz -> L
+; -------------------------------
+; Pri 4 MHz trva bitova bunka 57600 Bd 69T misto 35T, takze se cteni
+; vejde do smycky a nemusi byt rozbalene jako verze pro 2 MHz.
+;
+; Pozor na vstupni prodlevu: neda se odvodit zdvojnasobenim hodnoty pro 2 MHz.
+; Samotna detekce start-bitu trva v obou taktech stejnych 17-41T (je to
+; ta sama smycka), ale bunka je dvakrat sirsi - s pouhym zdvojnasobenim by
+; prvni vzorek padl jeste do start-bitu a cely bajt by vysel posunuty o bit.
+; Vzorkuje se proto ~103T po hrane, tedy ve stredu bunky 0. bitu.
+;
+; Pocet bitu se nepocita v B, ale zarazkou 80h v L: po osmi posunech
+; vypadne z L do Carry. Priznaky pri navratu jsou stejne jako u R57K6 -
+; posledni instrukce je RR L, takze Z plati pro nacteny bajt.
+; -------------------------------
+R57K64:		LD	A, 110b		;  7T	namapuj port
+		OUT	(LS174)	, A	; 11T
+		LD	L, 80h		;  7T	zarazka pro pocitani 8 bitu
+RSTOP4:		LD	A, (HL)		;  7T	nacti port
+		AND	01000000b	;  7T	vymaskuj 6. bit
+		JP	Z, ERROR	; 10T	jeste musi trvat stop-bit
+RSTRT4:		LD	A, (HL)		;  7T	nacti port
+		AND	01000000b	;  7T	zjisti, zda uz je start-bit
+		JP	NZ, RSTRT4	; 10T	pokud ne, jeste cekej
+		PUSH	BC		; 11T	vypln, aby prvni vzorek padl
+		POP	BC		; 10T	do stredu bunky 0. bitu
+		LD	A, (TPAD)	; 13T	(dohromady 34T)
+RBIT4:		PUSH	BC		; 11T	vypln
+		POP	BC		; 10T
+		LD	A, (TPAD)	; 13T	(dohromady 34T)
+		LD	A, (HL)		;  7T	vzorkuj port
+		RLCA			;  4T	dvakrat odrotuj
+		RLCA			;  4T	do Carry
+		RR	L		;  8T	z Carry buduj vysledny bajt v L
+		JR	NC, RBIT4	; 12T	dohromady 69T na bit
+		RET			; 10T
+; -------------------------------

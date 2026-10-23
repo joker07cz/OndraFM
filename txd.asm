@@ -16,7 +16,8 @@ T9600:	;DI
 		PUSH	HL		; uloz registre
 		PUSH	BC
 		LD	L, A		; uschovaj byte
-		LD	H, 12		; casova konstanta
+		LD	A, (T96BIT)	; casova konstanta, nastavuje ji CPUDET
+		LD	H, A		; podle taktu CPU (12 pri 2 MHz, 28 pri 4 MHz)
 		LD	C, 8		; bude 8 bitov
 ;		LD	A, 010b		; video off, map allram
 ;		OUT	(LS174), A	;
@@ -41,7 +42,8 @@ TBIT:		DJNZ	$		; 13T/8T   cakaj
 		RRC	L		;  8T	   dummy
 		LD	A, 00001111b	;  7T	   nastav stop-bit, vypni LED , zapnute rele
 		OUT	(LS175), A	; 11T      odvysielaj
-		LD	B, 21		;  4T      casova konstanta dlzky stop-bitu
+		LD	A, (T96STP)	; 13T      casova konstanta delky stop-bitu
+		LD	B, A		;  4T      (21 pri 2 MHz, 44 pri 4 MHz)
 		DJNZ	$		; 13T/8T
 		POP	BC		; 10T
 		POP	HL		; obnov registre
@@ -52,6 +54,11 @@ TBIT:		DJNZ	$		; 13T/8T   cakaj
 ; rychlostou 57600 Bd, sirka bitu je 35T (odchylka 1%)
 ; --------------------------------------------
 T57k6:		;DI
+		PUSH	AF		; pri 4 MHz je bit dvakrat sirsi v T, odbocit
+		LD	A, (CPU4)	; na rutinu casovanou pro 4 MHz
+		OR	A
+		JR	NZ, T57k6A
+		POP	AF
 	       	PUSH	HL		; uloz registre
 		PUSH	BC
 		RLCA                    ; prvy posun o jeden bit (vysiela sa cez 2. bit)
@@ -124,5 +131,44 @@ T57k6:		;DI
 ;		EI
 		RET                     ; sirka stop-bitu vznikne automaticky
 		                        ; z casov dalsich instrukcii
+; --------------------------------------------
+; vyslani bajtu z reg. A na seriovou linku
+; rychlosti 57600 Bd pri taktu CPU 4 MHz
+; sirka bitu je 69T (odchylka -0,6%; u verze pro 2 MHz je 35T, tj. +0,8%)
+; --------------------------------------------
+; Pri 4 MHz je v bitove bunce dost mista na smycku, takze je rutina kratsi
+; nez rozbalena verze pro 2 MHz. Vypln drzi kazdy pruchod na 69T.
+; --------------------------------------------
+T57k6A:		POP	AF		; sem skace rozbocka na zacatku T57k6
+T57k64:		PUSH	HL		; uloz registry
+		PUSH	BC
+		RLCA			; prvni posun (vysila se pres 2. bit)
+		LD	L, A		; uschovej bajt
+		LD	H, 00000100b	; maska 2. bitu
+		LD	C, 00001000b	; STB a rele
+		LD	B, 8		; bude 8 bitu
+		RLC	L		; druhy posun, 0. bit je na 2. bitu
+		LD	A, C
+		OUT	(LS175), A	; 11T	 zapni start-bit (log.0)
+		PUSH	BC		; 11T	 vypln, aby 0. bit vysel 69T po start-bitu
+		POP	BC		; 10T
+TB4:		LD	A, R		;  9T	 vypln
+		LD	A, R		;  9T
+		LD	A, 0		;  7T	 (dohromady 25T)
+		LD	A, L		;  4T	 pouzij uschovany bajt
+		AND	H		;  4T	 jen 2. bit
+		OR	C		;  4T	 a jeste STB
+		OUT	(LS175), A	; 11T	 vysli
+		RRC	L		;  8T	 priprav dalsi bit
+		DJNZ	TB4		; 13T	 dohromady 69T na bit
+		LD	A, (TPAD)	; 13T	 vypln do konce 8. bitu
+		LD	A, (TPAD)	; 13T
+		LD	A, R		;  9T
+		LD	A, 00001101b	;  7T	 stop-bit, vypni LED (stejna hodnota,
+					;	 jakou konci rozbalena verze pro 2 MHz)
+		OUT	(LS175), A	; 11T	 69T po poslednim datovem bitu
+		POP	BC
+		POP	HL		; obnov registry
+		RET
 ; --------------------------------------------
 		                        

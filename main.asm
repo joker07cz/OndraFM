@@ -31,6 +31,8 @@ start:  	DI
 ;		LD	SP, TAPEBUF+1023
 		LD	A, 010b		; video off, allram [FAST]
 		OUT	(LS174)	, A
+		LD	A, 010b		; zmer takt CPU jeste pred prvnim bajtem
+		CALL	MEASUR		; pro modul - casovky i WAIT na nem zavisi
 		CALL	TONES		; zapipaj
 		LD	A, 'N'		; prikaz NOLDR - Zastav loader
 		CALL	T9600
@@ -47,7 +49,8 @@ start:  	DI
 		LD	A, 'K'		; prikaz VER
 		CALL	T57k6
 		CALL	LDINIT
-		CALL	R57K6		; nacitaj cislo verzie ako jeden bajt
+RDVER:		CALL	R57K6		; nacitaj cislo verzie ako jeden bajt
+					; cil CALLu prepisuje SETRD podle taktu
 		LD	A, L
 		LD	(VERFW), A	; uloz verziu FW
 		LD	HL, 2000
@@ -93,7 +96,7 @@ MLOOP:		LD	HL, TIME0	; cas
 		LD	B, 1
 		CALL	BEEP
 		POP	AF
-		LD	HL, MLOOP
+		LD	HL, MLOOPD	; navrat pres MLOOPD - pri 4 MHz doplni zpozdeni
 		PUSH	HL		; vytvor navratovu adresu
 		LD	HL, ACTPOS	; nastav na aktualnu poziciu, vyuzije sa neskor
 		CP	43
@@ -144,7 +147,9 @@ CHTXT:		LD	A, 0FBh		; uprav hodnotu
 ; ---------------------------------------------
 ; navrat do ViLi
 ; --------------------------------------------
-GOROM:		LD	A, 'X'		; prikaz RESET, uvedie modul do vychodiskoveho stavu
+GOROM:		LD	A, 011b		; zmer takt (prepinac mohl cvaknout v menu)
+		CALL	MEASUR
+		LD	A, 'X'		; prikaz RESET, uvedie modul do vychodiskoveho stavu
 		CALL	T57k6
 		LD	A, 000b		; mapuj ROM
 		OUT	(LS174)	, A
@@ -158,6 +163,8 @@ LOADIT:		LD	C, 128
 		CALL	BEEP
 		LD	A, 010b
 		OUT	(LS174)	, A	; video off
+		LD	A, 010b		; zmer takt jeste pred vetvenim na CHDIR,
+		CALL	MEASUR		; obe vetve posilaji prikaz modulu
 		LD	A, (ACTPOS)	; aktualny index
 		CALL	RECMEM          ; vrat fyzicku adresu zaznamu
 		PUSH    HL
@@ -170,6 +177,11 @@ LOADIT:		LD	C, 128
 		PUSH	HL		; zahraj
 		CALL	TONES
 		POP	HL
+		LD	A, 010b		; zavadec v TAPE BUFFER ma vlastni priznak
+		CALL	TAPEBUF+6	; taktu - nech ho premerit (CPUDET).
+					; Musi to byt JESTE PRED prikazem pro modul:
+					; mereni trva 20-40 ms s povolenym prerusenim
+					; a odpoved modulu by se do nej ztratila.
 		LD	A, 'I'		; prikaz ILLUMINATE zapni LED
 		CALL	T57k6
 		LD	A, 1		; ON
@@ -361,7 +373,9 @@ DNAME:		LD	A, (HL)		; nacitaj nazov
 ; ---------------------------------------------
 ; nastavenie root adresara                                     [FAST]
 ; --------------------------------------------
-ROOTDIR:	LD	A, 'C'		; prikaz CHDIR
+ROOTDIR:	LD	A, 010b		; zmer takt pred prikazem pro modul
+		CALL	MEASUR
+		LD	A, 'C'		; prikaz CHDIR
 		CALL	T57k6
 		LD	A, '/'		; ROOT
 		CALL	T57k6
@@ -376,7 +390,7 @@ SPACE:		LD	A, 20h		; a este 10 medzier
 READDIR:	LD	A, 0
 ;	RET			; pre testy
 		LD	(RECORDS), A	; vynuluj pocitadlo zaznamov
-		LD	A, 00011110b	; pocas citania bude svietit zelena LED
+		LD	A, 00001110b	; zelena LED (bit 0 = 0); bit 4 = rele musi zustat 0
 		OUT	(LS173), A
 		LD	A, 'D'		; prikaz DIR
 		CALL	T57k6
@@ -547,6 +561,8 @@ FOOTER0:	LD	HL, FOOTNO	; nastav na poziciu 0
 ; spustenie programu
 ; --------------------------------------------
 RUN:		PUSH	DE		; urob z DE navratovu adresu programu
+		LD	A, 010b		; zmer takt - priznak je z doby pred
+		CALL	MEASUR		; nactenim souboru, mohl zastarat
 		LD	C, 32		; zapipaj
 		LD	B, 5
 		CALL	BEEP
@@ -566,6 +582,53 @@ RUN:		PUSH	DE		; urob z DE navratovu adresu programu
 		RET			; skok na startovaciu adresu programu
 		;
 ; ---------------------------------------------
+; autorepeat pri 4 MHz
+; ---------------------------------------------
+; Opakovani klavesy nema zadny casovac, je to jen rychlost smycky MLOOP. WAIT se
+; pri 4 MHz projde dvakrat, takze jeho cas zustane stejny, ale KEYSCAN a obsluha
+; sipek jsou jen kod a bezi na 4 MHz za polovicni cas - kurzor pak projizdi
+; seznam rychleji. Namereno v JOndrovi s drzenou sipkou dolu:
+;   2 MHz: 59 189 T na pruchod = 7,70 snimku (~154 ms)
+;   4 MHz: 72 772 T na pruchod = 4,73 snimku (~95 ms)
+; Cil na 4 MHz je 7,70 snimku = 118 320 T, chybi 45 548 T. WAIT pri 4 MHz projde
+; smycku dvakrat, jedna iterace ma 26 T (DEC HL 6, LD A,H 4, OR L 4, JR NZ 12 -
+; komentar "31T" u WAIT je nepresny). Prvni pokus s HL = 734 pridal namerenych
+; 38 901 T, tedy 53,0 T na HL vcetne rezie: HL = 45 548 / 53,0 = 859.
+; Zpozdeni se prida za obsluhu klavesy, aby prvni reakce na stisk zustala hned.
+; Hodnota zavisi na delce obsluhy klaves; pri uprave kodu v MLOOP/LEFT/RIGHT/UP/
+; DOWN/BEEP ji znovu zmerit. Takt se tu nemeri znovu - pouziva se CPU4 z
+; posledniho MEASUR (start, nacteni adresare apod.), takze po cvaknuti
+; prepinace behem prochazeni slozky se rychlost srovna az pri dalsim mereni.
+RPTWT		EQU	859
+MLOOPD:		LD	A, (CPU4)
+		OR	A
+		JP	Z, MLOOP	; 2 MHz - bez zpozdeni
+		LD	HL, RPTWT
+		CALL	WAIT		; WAIT se pri 4 MHz projde 2x
+		JP	MLOOP
+; ---------------------------------------------
+; zmereni taktu CPU a nastaveni vseho, co na nem zavisi
+; ---------------------------------------------
+; vstup: A = stav portu 03H, ktery ma platit po navratu
+; meni:  AF, HL
+; ---------------------------------------------
+MEASUR:		CALL	CPUDET		; prepinac 2/4 MHz je mechanicky a da se
+					; cvaknout i za behu, proto se meri pred
+					; kazdou akci, ktera posila prikazy modulu
+; ---------------------------------------------
+; Cteci smycka v GETREC ma mezi bajty vyuzity kazdy T, takze tam nesmi
+; pribyt zadna rozbocka podle taktu. Cil CALLu se proto prepise primo
+; v kodu - jednou za mereni misto jednou za bajt.
+; ---------------------------------------------
+SETRD:		LD	HL, R57K6	; 2 MHz - rozbalena verze
+		LD	A, (CPU4)
+		OR	A
+		JR	Z, SETRD1
+		LD	HL, R57K64	; 4 MHz - verze se smyckou
+SETRD1:		LD	(GETREC+1), HL
+		LD	(RDVER+1), HL
+		RET
+; ---------------------------------------------
 VERFW:		DB	00h		; cislo verzie FW
 POSX:		DB	00h		; pozicia vykreslovaneho znaku
 POSY:		DB	00h
@@ -575,7 +638,7 @@ RECORDS:	DB	0		; pocet zaznamov
 FOOTNO:		DB	0FFh		; aktualna sprava
 TIME0:		DB	0		; hodnota casovaca pre texty
 TIME1:		DB	0FAh
-LINE1:		DM	"CARD MANAGER 1.40"
+LINE1:		DM	"CARD MANAGER 1.50"
 		DB	0
 LINE2:		DM	"(FW "
 LINE2B: 	DM	" . ) "
